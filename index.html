@@ -164,11 +164,11 @@ function DiaryApp() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { alert("Chrome 브라우저에서만 음성인식이 가능해요."); return; }
     const rec = new SR();
-    rec.lang='ko-KR'; rec.continuous=true; rec.interimResults=true;
-    let finalText='';
-    rec.onstart=()=>{ setIsRecording(true); setRecordingTime(0); timerRef.current=setInterval(()=>setRecordingTime(t=>t+1),1000); };
-    rec.onresult=(e)=>{ finalText=''; for(let i=0;i<e.results.length;i++){ if(e.results[i].isFinal) finalText+=e.results[i][0].transcript; } };
-    rec.onend=()=>{ clearInterval(timerRef.current); setIsRecording(false); setRecordingTime(0); if(finalText) setDraft(d=>({...d,text:d.text+(d.text?' ':'')+finalText})); };
+    rec.lang='ko-KR'; rec.continuous=true; rec.interimResults=false;
+    let newText='';
+    rec.onstart=()=>{ newText=''; setIsRecording(true); setRecordingTime(0); timerRef.current=setInterval(()=>setRecordingTime(t=>t+1),1000); };
+    rec.onresult=(e)=>{ for(let i=e.resultIndex;i<e.results.length;i++){ if(e.results[i].isFinal) newText+=e.results[i][0].transcript; } };
+    rec.onend=()=>{ clearInterval(timerRef.current); setIsRecording(false); setRecordingTime(0); if(newText) setDraft(d=>({...d,text:d.text+(d.text?' ':'')+newText})); };
     rec.onerror=(e)=>{ clearInterval(timerRef.current); setIsRecording(false); if(e.error!=='aborted') alert("마이크 권한을 허용해 주세요."); };
     rec.start(); recognitionRef.current=rec;
   };
@@ -326,7 +326,7 @@ function DiaryApp() {
             </div>
             <div style={S.section}>
               <div style={S.label}>오늘의 이야기</div>
-              <textarea style={S.textarea} placeholder="오늘 하루는 어땠나요?"
+              <textarea style={S.textarea} placeholder=""
                 value={draft.text} onChange={e=>setDraft(d=>({...d,text:e.target.value}))}/>
             </div>
             <div style={S.section}>
