@@ -17,8 +17,8 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; background: #FAF6F0; font-family: 'Noto Sans KR', sans-serif; overflow: hidden; }
-    #root { height: 100%; display: flex; flex-direction: column; }
+    html, body { height: 100%; width: 100%; max-width: 100vw; overflow-x: hidden; background: #FAF6F0; font-family: 'Noto Sans KR', sans-serif; }
+    #root { height: 100%; width: 100%; display: flex; flex-direction: column; overflow-x: hidden; }
     @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.3)} }
     @keyframes savePop { 0%{transform:scale(1)} 50%{transform:scale(1.15)} 100%{transform:scale(1)} }
     @keyframes slideUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
@@ -346,7 +346,7 @@ function DiaryApp() {
 }
 
 const styles = {
-  root: { height:"100%", display:"flex", flexDirection:"column", background:"#FAF6F0", maxWidth:480, margin:"0 auto" },
+  root: { height:"100%", width:"100%", display:"flex", flexDirection:"column", background:"#FAF6F0", maxWidth:"100vw", overflow:"hidden" },
   header: { background:"#FAF6F0", borderBottom:"1px solid #E8DDD0", padding:"max(env(safe-area-inset-top),14px) 16px 12px", flexShrink:0, zIndex:10 },
   headerInner: { display:"flex", alignItems:"center", justifyContent:"space-between" },
   headerTitle: { fontFamily:"'Nanum Myeongjo',serif", fontSize:22, fontWeight:900, color:"#5C4A32", flex:1, textAlign:"center" },
