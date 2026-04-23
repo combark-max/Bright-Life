@@ -1,4 +1,4 @@
-const CACHE = 'diary-pwa-v2';
+const CACHE = 'diary-pwa-v3';
 const ASSETS = [
   '/Bright-Life/',
   '/Bright-Life/index.html',
