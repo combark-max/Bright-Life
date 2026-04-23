@@ -88,26 +88,46 @@ function DiaryApp() {
     setShowCalendar(false);
   }, [view, selectedDate]);
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
-      mr.ondataavailable = () => {};
-      mr.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        const sample = "오늘 하루도 수고했어. 좋은 일들이 많이 있었으면 좋겠다.";
-        setDraft(d => ({ ...d, text: d.text + (d.text ? " " : "") + sample }));
-      };
-      mr.start();
-      mediaRecorderRef.current = mr;
+  const recognitionRef = useRef(null);
+
+  const startRecording = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) { alert("이 브라우저는 음성인식을 지원하지 않아요. Chrome을 사용해 주세요."); return; }
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'ko-KR';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    let finalText = '';
+    recognition.onstart = () => {
       setIsRecording(true);
       setRecordingTime(0);
       timerRef.current = setInterval(() => setRecordingTime(t => t+1), 1000);
-    } catch { alert("마이크 접근 권한이 필요합니다."); }
+    };
+    recognition.onresult = (e) => {
+      let interim = '';
+      finalText = '';
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) finalText += e.results[i][0].transcript;
+        else interim += e.results[i][0].transcript;
+      }
+    };
+    recognition.onend = () => {
+      clearInterval(timerRef.current);
+      setIsRecording(false);
+      setRecordingTime(0);
+      if (finalText) setDraft(d => ({ ...d, text: d.text + (d.text ? ' ' : '') + finalText }));
+    };
+    recognition.onerror = (e) => {
+      clearInterval(timerRef.current);
+      setIsRecording(false);
+      if (e.error !== 'aborted') alert("음성인식 오류: 마이크 권한을 확인해 주세요.");
+    };
+    recognition.start();
+    recognitionRef.current = recognition;
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current) { mediaRecorderRef.current.stop(); mediaRecorderRef.current = null; }
+    if (recognitionRef.current) { recognitionRef.current.stop(); recognitionRef.current = null; }
     clearInterval(timerRef.current);
     setIsRecording(false); setRecordingTime(0);
   };
@@ -260,15 +280,15 @@ function DiaryApp() {
             {/* Photo */}
             <div style={S.section}>
               <div style={S.label}>사진 첨부</div>
-              <input ref={fileInputRef} type="file" accept="image/*" capture="environment" style={{display:"none"}} onChange={handlePhoto}/>
+              <input ref={fileInputRef} type="file" accept="image/*" style={{display:"none"}} onChange={handlePhoto}/>
               {photoPreview
                 ? <div style={{position:"relative",borderRadius:14,overflow:"hidden"}}>
                     <img src={photoPreview} alt="" style={{width:"100%",maxHeight:200,objectFit:"cover",display:"block",borderRadius:14}}/>
                     <button style={S.removePhoto} onClick={()=>{setPhotoPreview(null);setDraft(d=>({...d,photo:null}));}}>✕</button>
                   </div>
                 : <button style={S.photoBtn} onClick={()=>fileInputRef.current.click()}>
-                    <span style={{fontSize:24}}>📷</span>
-                    <span>사진 추가 / 카메라 촬영</span>
+                    <span style={{fontSize:24}}>🖼️</span>
+                    <span>갤러리에서 사진 선택</span>
                   </button>
               }
             </div>
@@ -293,7 +313,7 @@ function DiaryApp() {
                     <button style={S.stopBtn} onClick={stopRecording}>⏹ 완료</button>
                   </div>
                 : <button style={S.voiceBtn} onClick={startRecording}>
-                    <span style={{fontSize:22}}>🎙️</span> 음성 입력 시작
+                    <span style={{fontSize:22}}>🎙️</span> 탭하고 말하면 글로 변환돼요
                   </button>
               }
             </div>
