@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#FAF6F0" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="明's Life" />
+  <title>明's Life</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;700;800&family=Noto+Sans+KR:wght@300;400;500&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; width: 100%; overflow-x: hidden; background: #FAF6F0; font-family: 'Noto Sans KR', sans-serif; }
+    #root { height: 100%; width: 100%; display: flex; flex-direction: column; overflow-x: hidden; }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(1.3)} }
+    @keyframes savePop { 0%{transform:scale(1)} 50%{transform:scale(1.15)} 100%{transform:scale(1)} }
+    @keyframes slideUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    ::-webkit-scrollbar { display: none; }
+    textarea { -webkit-appearance: none; }
+    button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect } = React;
+
+const GH_CONFIG_KEY = 'diary_gh_config_v1';
+const PIN_KEY = 'diary_pin_v1';
+const MAX_PHOTOS = 10;
+const DATA_FILE = 'diary_data.json';
+
+function loadConfig() {
+  try { const r = localStorage.getItem(GH_CONFIG_KEY); if (r) return JSON.parse(r); } catch(e) {}
+  return null;
+}
+function saveConfig(cfg) {
+  try { localStorage.setItem(GH_CONFIG_KEY, JSON.stringify(cfg)); } catch(e) {}
+}
+function loadPin() { try { return localStorage.getItem(PIN_KEY)||""; } catch(e) { return ""; } }
+function savePin(p) { try { localStorage.setItem(PIN_KEY, p); } catch(e) {} }
+
+async function ghFetch(cfg, path, method='GET', body=null) {
+  const res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+    method,
+    headers: {
+      'Authorization': `token ${cfg.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(()=>({}));
+    throw new Error(err.message || `GitHub API 오류 (${res.status})`);
+  }
+  return res.json();
+}
+
+async function loadFromGitHub(cfg) {
+  try {
+    const data = await ghFetch(cfg, DATA_FILE);
+    const decoded = decodeURIComponent(escape(atob(data.content.replace(/\n/g,''))));
+    return { entries: JSON.parse(decoded), sha: data.sha };
+  } catch(e) {
+    if (e.message && (e.message.includes('Not Found') || e.message.includes('404'))) {
+      return { entries: {}, sha: null };
+    }
+    throw e;
+  }
+}
+
+async function saveToGitHub(cfg, entries, sha) {
+  const jsonStr = JSON.stringify(entries, null, 2);
+  const content = btoa(unescape(encodeURIComponent(jsonStr)));
+  const body = {
+    message: `일기 업데이트 ${new Date().toLocaleString('ko-KR')}`,
+    content,
+    ...(sha ? { sha } : {}),
+  };
+  const result = await ghFetch(cfg, DATA_FILE, 'PUT', body);
+  return result.content.sha;
+}
+
+const MOODS = ["행복","평온","설렘","피곤","슬픔","화남"];
+const MOOD_COLORS = {행복:"#F6A623",평온:"#7BAFD4",설렘:"#E87D7D",피곤:"#A89F94",슬픔:"#7A9BB5",화남:"#C0654A"};
+const MOOD_EMOJI  = {행복:"☀️",평온:"🌿",설렘:"🌸",피곤:"🌙",슬픔:"🌧️",화남:"🔥"};
+
+function formatDate(ds) {
+  const d = new Date(ds+'T00:00:00');
+  return d.toLocaleDateString("ko-KR",{year:"numeric",month:"long",day:"numeric",weekday:"long"});
+}
+function getTodayStr() { return new Date().toISOString().split("T")[0]; }
+
+function PinScreen({ mode, onSuccess, onCancel }) {
+  const [pin, setPin] = useState("");
+  const [confirmPin, setConfirmPin] = useState("");
+  const [step, setStep] = useState(1);
+  const [error, setError] = useState("");
+
+  const handleNum = (n) => {
+    setError("");
+    if (mode === "set") {
+      if (step === 1) {
+        const next = pin + n;
+        setPin(next);
+        if (next.length === 4) setStep(2);
+      } else {
+        const next = confirmPin + n;
+        setConfirmPin(next);
+        if (next.length === 4) {
+          if (next === pin) { savePin(pin); onSuccess(); }
+          else { setError("비밀번호가 일치하지 않아요"); setConfirmPin(""); setStep(1); setPin(""); }
+        }
+      }
+    } else {
+      const next = pin + n;
+      setPin(next);
+      if (next.length === 4) {
+        if (next === loadPin()) { onSuccess(); }
+        else { setError("비밀번호가 틀렸어요"); setPin(""); }
+      }
+    }
+  };
+
+  const handleDel = () => {
+    setError("");
+    if (mode === "set" && step === 2) setConfirmPin(c => c.slice(0,-1));
+    else setPin(p => p.slice(0,-1));
+  };
+
+  const current = (mode==="set" && step===2) ? confirmPin : pin;
+  const title = mode==="set" ? (step===1 ? "비밀번호 설정" : "비밀번호 확인") : "비밀번호 입력";
+  const sub = mode==="set" ? (step===1 ? "4자리 숫자를 입력해 주세요" : "다시 한 번 입력해 주세요") : "4자리 비밀번호를 입력해 주세요";
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"#FAF6F0",zIndex:1000,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{fontFamily:"'Nanum Myeongjo',serif",fontSize:28,fontWeight:900,color:"#5C4A32",marginBottom:8}}>
+        <span style={{color:"#C0392B"}}>明</span>'s Life
+      </div>
+      <div style={{fontSize:16,fontWeight:600,color:"#5C4A32",marginBottom:6,marginTop:28}}>{title}</div>
+      <div style={{fontSize:13,color:"#A89070",marginBottom:28}}>{sub}</div>
+      <div style={{display:"flex",gap:14,marginBottom:32}}>
+        {[0,1,2,3].map(i=>(
+          <div key={i} style={{width:14,height:14,borderRadius:"50%",background:i<current.length?"#8B6D4E":"#E0D4C4",transition:"background .15s"}}/>
+        ))}
+      </div>
+      {error && <div style={{color:"#C0654A",fontSize:13,marginBottom:16,fontWeight:500}}>{error}</div>}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,width:"100%",maxWidth:280}}>
+        {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((n,i)=>(
+          <button key={i} style={{height:64,borderRadius:16,border:"none",background:n===""?"transparent":n==="⌫"?"#F0E8DC":"#FFFDF9",boxShadow:n===""||n==="⌫"?"none":"0 2px 8px rgba(100,70,40,.1)",fontSize:n==="⌫"?20:22,fontWeight:600,color:"#5C4A32",cursor:n===""?"default":"pointer",fontFamily:"'Noto Sans KR',sans-serif"}}
+            onClick={()=>{ if(n==="⌫") handleDel(); else if(n!=="") handleNum(String(n)); }}>
+            {n}
+          </button>
+        ))}
+      </div>
+      {onCancel && <button style={{marginTop:24,background:"none",border:"none",color:"#A89070",fontSize:13,cursor:"pointer"}} onClick={onCancel}>취소</button>}
+    </div>
+  );
+}
+
+function GitHubSetup({ onDone, canCancel, onCancel }) {
+  const existing = loadConfig() || {};
+  const [owner, setOwner] = useState(existing.owner||"");
+  const [repo, setRepo]   = useState(existing.repo||"");
+  const [token, setToken] = useState(existing.token||"");
+  const [testing, setTesting] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSave = async () => {
+    if (!owner.trim() || !repo.trim() || !token.trim()) {
+      setError("모든 항목을 입력해 주세요."); return;
+    }
+    setTesting(true); setError("");
+    const cfg = { owner: owner.trim(), repo: repo.trim(), token: token.trim() };
+    try {
+      const res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}`, {
+        headers: { 'Authorization': `token ${cfg.token}`, 'Accept': 'application/vnd.github.v3+json' }
+      });
+      if (!res.ok) throw new Error("저장소를 찾을 수 없어요. 사용자명·저장소명·토큰을 확인해 주세요.");
+      saveConfig(cfg);
+      onDone(cfg);
+    } catch(e) {
+      setError(e.message || "연결에 실패했어요.");
+    }
+    setTesting(false);
+  };
+
+  const inp = {width:"100%",border:"1.5px solid #E0D4C4",borderRadius:10,padding:"11px 13px",fontSize:15,color:"#5C4A32",background:"#FFFDF9",outline:"none",fontFamily:"'Noto Sans KR',sans-serif",marginBottom:12};
+  const lbl = {fontSize:12,fontWeight:600,color:"#A89070",letterSpacing:.5,marginBottom:5,display:"block"};
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"#FAF6F0",zIndex:999,overflowY:"auto",padding:"40px 24px 60px"}}>
+      <div style={{maxWidth:420,margin:"0 auto"}}>
+        <div style={{fontFamily:"'Nanum Myeongjo',serif",fontSize:26,fontWeight:900,color:"#5C4A32",textAlign:"center",marginBottom:6}}>
+          <span style={{color:"#C0392B"}}>明</span>'s Life
+        </div>
+        <div style={{textAlign:"center",fontSize:13,color:"#A89070",marginBottom:28}}>GitHub에 일기를 영구 저장해요</div>
+
+        <div style={{background:"#FFFDF9",borderRadius:16,padding:18,boxShadow:"0 2px 12px rgba(100,70,40,.08)",marginBottom:22,fontSize:13,color:"#8B7A68",lineHeight:1.9}}>
+          <strong style={{color:"#5C4A32"}}>📌 처음 사용 시 설정 방법</strong><br/>
+          1. GitHub에서 <strong>새 저장소(Repository)</strong>를 만드세요<br/>
+          &nbsp;&nbsp;&nbsp;(Public 또는 Private 모두 가능)<br/>
+          2. GitHub <strong>Settings → Developer settings<br/>
+          &nbsp;&nbsp;&nbsp;→ Personal access tokens → Tokens (classic)</strong><br/>
+          3. <strong>Generate new token</strong> 클릭 후<br/>
+          &nbsp;&nbsp;&nbsp;권한: <code style={{background:"#F0E8DC",padding:"1px 6px",borderRadius:4,fontSize:12}}>repo</code> 에 체크하고 생성<br/>
+          4. 아래에 입력 후 저장하세요
+        </div>
+
+        <label style={lbl}>GitHub 사용자명 (owner)</label>
+        <input style={inp} placeholder="예: your-github-username" value={owner} onChange={e=>setOwner(e.target.value)} autoCapitalize="none" autoCorrect="off"/>
+
+        <label style={lbl}>저장소 이름 (repo)</label>
+        <input style={inp} placeholder="예: my-diary" value={repo} onChange={e=>setRepo(e.target.value)} autoCapitalize="none" autoCorrect="off"/>
+
+        <label style={lbl}>Personal Access Token</label>
+        <input style={{...inp,fontFamily:"monospace",fontSize:13,letterSpacing:.5}} placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" value={token} onChange={e=>setToken(e.target.value)} type="password" autoCapitalize="none" autoCorrect="off"/>
+
+        {error && (
+          <div style={{color:"#C0654A",fontSize:13,marginBottom:14,padding:"10px 13px",background:"#FFF0EE",borderRadius:10,lineHeight:1.6}}>
+            ⚠️ {error}
+          </div>
+        )}
+
+        <button style={{width:"100%",background:testing?"#A89070":"#8B6D4E",color:"#FAF6F0",border:"none",borderRadius:12,padding:15,fontSize:15,fontWeight:700,cursor:testing?"not-allowed":"pointer",fontFamily:"'Noto Sans KR',sans-serif",marginBottom:10,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}
+          onClick={handleSave} disabled={testing}>
+          {testing
+            ? <><div style={{width:18,height:18,border:"2px solid rgba(255,255,255,.4)",borderTopColor:"#fff",borderRadius:"50%",animation:"spin 1s linear infinite"}}/> 연결 확인 중...</>
+            : "✅ 저장하고 시작하기"
+          }
+        </button>
+
+        {canCancel && (
+          <button style={{width:"100%",background:"none",border:"1px solid #E0D4C4",borderRadius:12,padding:13,fontSize:14,color:"#A89070",cursor:"pointer"}} onClick={onCancel}>
+            취소
+          </button>
+        )}
+
+        <div style={{marginTop:18,fontSize:12,color:"#B8A898",textAlign:"center",lineHeight:1.9}}>
+          🔒 토큰은 이 기기에만 저장됩니다<br/>
+          일기 데이터는 GitHub 저장소에 안전하게 보관되며<br/>
+          캐시를 지워도 사라지지 않아요
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DiaryApp() {
+  const [config, setConfig] = useState(null);
+  const [showGHSetup, setShowGHSetup] = useState(false);
+  const [entries, setEntries] = useState({});
+  const [sha, setSha] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const [view, setView] = useState("list");
+  const [selectedDate, setSelectedDate] = useState(getTodayStr());
+  const [draft, setDraft] = useState({text:"",mood:"행복",photos:[]});
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [saveAnim, setSaveAnim] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(()=>{ const d=new Date(); return{year:d.getFullYear(),month:d.getMonth()}; });
+  const [pinMode, setPinMode] = useState(null);
+  const [unlocked, setUnlocked] = useState(false);
+
+  const fileInputRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    const pin = loadPin();
+    if (!pin) setPinMode("set");
+    else setPinMode("lock");
+    const cfg = loadConfig();
+    if (cfg) setConfig(cfg);
+    else setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (!config) return;
+    setLoading(true); setSyncError("");
+    loadFromGitHub(config)
+      .then(({ entries: e, sha: s }) => { setEntries(e); setSha(s); })
+      .catch(err => setSyncError("GitHub 로딩 실패: " + err.message))
+      .finally(() => setLoading(false));
+  }, [config]);
+
+  useEffect(() => {
+    if (view==="write" && entries[selectedDate]) {
+      const e = entries[selectedDate];
+      setDraft({text:e.text||"", mood:e.mood||"행복", photos:e.photos||[]});
+    } else if (view==="write") {
+      setDraft({text:"",mood:"행복",photos:[]});
+    }
+    setShowCalendar(false);
+  }, [view, selectedDate]);
+
+  const startRecording = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("Chrome 브라우저에서만 음성인식이 가능해요."); return; }
+    const rec = new SR();
+    rec.lang='ko-KR'; rec.continuous=true; rec.interimResults=false;
+    let newText='';
+    rec.onstart=()=>{ newText=''; setIsRecording(true); setRecordingTime(0); timerRef.current=setInterval(()=>setRecordingTime(t=>t+1),1000); };
+    rec.onresult=(e)=>{ for(let i=e.resultIndex;i<e.results.length;i++){ if(e.results[i].isFinal) newText+=e.results[i][0].transcript; } };
+    rec.onend=()=>{ clearInterval(timerRef.current); setIsRecording(false); setRecordingTime(0); if(newText) setDraft(d=>({...d,text:d.text+(d.text?' ':'')+newText})); };
+    rec.onerror=(e)=>{ clearInterval(timerRef.current); setIsRecording(false); if(e.error!=='aborted') alert("마이크 권한을 허용해 주세요."); };
+    rec.start(); recognitionRef.current=rec;
+  };
+  const stopRecording=()=>{ if(recognitionRef.current){recognitionRef.current.stop();recognitionRef.current=null;} clearInterval(timerRef.current); setIsRecording(false); setRecordingTime(0); };
+
+  const handlePhotos=(e)=>{
+    const files=Array.from(e.target.files);
+    const remaining=MAX_PHOTOS-draft.photos.length;
+    const toAdd=files.slice(0,remaining);
+    if(files.length>remaining) alert(`최대 ${MAX_PHOTOS}장까지 첨부할 수 있어요. ${remaining}장만 추가됩니다.`);
+    toAdd.forEach(file=>{ const reader=new FileReader(); reader.onload=ev=>setDraft(d=>({...d,photos:[...d.photos,ev.target.result]})); reader.readAsDataURL(file); });
+    e.target.value="";
+  };
+  const removePhoto=(idx)=>setDraft(d=>({...d,photos:d.photos.filter((_,i)=>i!==idx)}));
+
+  const saveEntry = async () => {
+    if (!config) { alert("GitHub 연결이 필요해요."); return; }
+    setSaving(true); setSyncError("");
+    const newEntries = { ...entries, [selectedDate]: { ...draft } };
+    try {
+      const newSha = await saveToGitHub(config, newEntries, sha);
+      setEntries(newEntries); setSha(newSha);
+      setSaveAnim(true);
+      setTimeout(()=>{ setSaveAnim(false); setView("list"); }, 700);
+    } catch(e) {
+      setSyncError("저장 실패: " + e.message);
+      alert("저장에 실패했어요:\n" + e.message);
+    }
+    setSaving(false);
+  };
+
+  const deleteEntry = async (date) => {
+    if (!confirm("이 일기를 삭제할까요?")) return;
+    setSaving(true);
+    const newEntries = { ...entries };
+    delete newEntries[date];
+    try {
+      const newSha = await saveToGitHub(config, newEntries, sha);
+      setEntries(newEntries); setSha(newSha); setView("list");
+    } catch(e) {
+      alert("삭제 실패: " + e.message);
+    }
+    setSaving(false);
+  };
+
+  const exportAll = async () => {
+    if (!sortedDates.length) { alert("저장할 일기가 없어요."); return; }
+    for (const date of sortedDates) {
+      const e = entries[date];
+      const content = [`📖 明's Life — 일기`,`날짜: ${formatDate(date)}`,`기분: ${MOOD_EMOJI[e.mood]} ${e.mood}`,``,`────────────────────`,``,e.text||"(내용 없음)",``,`────────────────────`,`사진: ${(e.photos||[]).length}장`,`저장: ${new Date().toLocaleString("ko-KR")}`].join("\n");
+      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([content],{type:"text/plain;charset=utf-8"})); a.download=`diary_${date}.txt`; a.click();
+      await new Promise(r=>setTimeout(r,300));
+      for (let i=0; i<(e.photos||[]).length; i++) {
+        const pa = document.createElement("a"); pa.href=e.photos[i]; pa.download=`diary_${date}_photo${i+1}.jpg`; pa.click();
+        await new Promise(r=>setTimeout(r,300));
+      }
+    }
+  };
+
+  const sortedDates = Object.keys(entries).sort((a,b)=>b.localeCompare(a));
+  const S = styles;
+
+  if (pinMode==="set") return <PinScreen mode="set" onSuccess={()=>{setPinMode(null);setUnlocked(true);}} onCancel={unlocked?()=>setPinMode(null):null}/>;
+  if (pinMode==="lock" && !unlocked) return <PinScreen mode="lock" onSuccess={()=>setUnlocked(true)} onCancel={null}/>;
+  if (!config || showGHSetup) return <GitHubSetup onDone={(cfg)=>{ setConfig(cfg); setShowGHSetup(false); }} canCancel={showGHSetup} onCancel={()=>setShowGHSetup(false)}/>;
+
+  if (loading) return (
+    <div style={{position:"fixed",inset:0,background:"#FAF6F0",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+      <div style={{fontFamily:"'Nanum Myeongjo',serif",fontSize:26,fontWeight:900,color:"#5C4A32"}}><span style={{color:"#C0392B"}}>明</span>'s Life</div>
+      <div style={{width:28,height:28,border:"3px solid #E0D4C4",borderTopColor:"#8B6D4E",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+      <div style={{fontSize:13,color:"#A89070"}}>GitHub에서 불러오는 중...</div>
+    </div>
+  );
+
+  return (
+    <div style={S.root}>
+      {saving && <div style={{position:"fixed",top:0,left:0,right:0,background:"#8B6D4E",color:"#FAF6F0",textAlign:"center",padding:"6px",fontSize:12,zIndex:9999}}>⏳ GitHub에 저장 중...</div>}
+      {syncError && <div style={{position:"fixed",top:0,left:0,right:0,background:"#C0654A",color:"#FAF6F0",textAlign:"center",padding:"6px",fontSize:12,zIndex:9999,cursor:"pointer"}} onClick={()=>setSyncError("")}>⚠️ {syncError} (탭하여 닫기)</div>}
+
+      <div style={S.header}>
+        <div style={S.headerInner}>
+          {view!=="list"
+            ?<button style={S.iconBtn} onClick={()=>setView("list")}>←</button>
+            :<button style={S.iconBtn} onClick={()=>setPinMode("set")}>🔒</button>
+          }
+          <div style={S.headerTitle}>
+            {view==="list"&&<><span style={{color:"#C0392B",fontWeight:900}}>明</span>'s Life</>}
+            {view==="write"&&<>✏️ {formatDate(selectedDate).split(" ").slice(0,3).join(" ")}</>}
+            {view==="read"&&<>📖 일기 보기</>}
+          </div>
+          {view==="list"&&<button style={S.pillBtn} onClick={()=>{setSelectedDate(getTodayStr());setView("write");}}>+ 오늘</button>}
+          {view==="write"&&<button style={{...S.pillBtn,...(saveAnim?{background:"#5C8A4E"}:{})}} onClick={saveEntry} disabled={saving}>{saving?"저장중":"저장"}</button>}
+          {view==="read"&&<button style={{...S.pillBtn,background:"transparent",color:"#8B6D4E",border:"1px solid #C4A882"}} onClick={()=>setView("write")}>수정</button>}
+        </div>
+      </div>
+
+      {view==="list"&&(
+        <div style={S.scroll}>
+          <div style={S.hero}>
+            <div style={S.heroDate}>{new Date().toLocaleDateString("ko-KR",{month:"long",day:"numeric"})}</div>
+            <div style={S.heroSub}>오늘의 이야기를 기록해요</div>
+            <div style={S.heroEmoji}>🌿</div>
+          </div>
+          {!sortedDates.length&&<div style={S.empty}><div style={{fontSize:44}}>📝</div><p>첫 번째 일기를 써보세요!</p></div>}
+          {sortedDates.map(date=>{
+            const e=entries[date]; const mc=MOOD_COLORS[e.mood]||"#C4A882"; const photos=e.photos||[];
+            return(
+              <div key={date} style={S.card} onClick={()=>{setSelectedDate(date);setView("read");}}>
+                <div style={{...S.cardBar,background:mc}}/>
+                <div style={S.cardBody}>
+                  <div style={S.cardRow}>
+                    <span style={S.cardDate}>{formatDate(date).split(" ").slice(0,3).join(" ")}</span>
+                    <span style={{...S.badge,background:mc+"25",color:mc}}>{MOOD_EMOJI[e.mood]} {e.mood}</span>
+                  </div>
+                  <div style={S.cardPreview}>{(e.text||(photos.length?"📷 사진 일기":"")||"").slice(0,50)}</div>
+                  {photos.length>0&&<div style={{display:"flex",gap:4,marginTop:6}}>
+                    {photos.slice(0,3).map((p,i)=><img key={i} src={p} alt="" style={{width:40,height:40,objectFit:"cover",borderRadius:6}}/>)}
+                    {photos.length>3&&<div style={{width:40,height:40,borderRadius:6,background:"#E8DDD0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#8B6D4E",fontWeight:700}}>+{photos.length-3}</div>}
+                  </div>}
+                </div>
+              </div>
+            );
+          })}
+          <div style={{height:16}}/>
+        </div>
+      )}
+
+      {view==="write"&&(
+        <div style={S.scroll}>
+          <div style={{padding:"18px 18px 0"}}>
+            <button style={S.datePill} onClick={()=>setShowCalendar(v=>!v)}>
+              <span style={S.datePillText}>{formatDate(selectedDate)}</span>
+              <span style={{fontSize:13,opacity:.6}}>📅</span>
+            </button>
+            {showCalendar&&(
+              <div style={S.cal}>
+                <div style={S.calHead}>
+                  <button style={S.calNav} onClick={()=>setCalendarMonth(m=>{const d=new Date(m.year,m.month-1,1);return{year:d.getFullYear(),month:d.getMonth()}})}>‹</button>
+                  <span style={S.calTitle}>{calendarMonth.year}년 {calendarMonth.month+1}월</span>
+                  <button style={S.calNav} onClick={()=>setCalendarMonth(m=>{const d=new Date(m.year,m.month+1,1);return{year:d.getFullYear(),month:d.getMonth()}})}>›</button>
+                </div>
+                <div style={S.calGrid}>
+                  {["일","월","화","수","목","금","토"].map((d,i)=>(
+                    <div key={d} style={{...S.calDayLabel,color:i===0?"#C0392B":i===6?"#7BAFD4":"#A89070"}}>{d}</div>
+                  ))}
+                  {(()=>{
+                    const first=new Date(calendarMonth.year,calendarMonth.month,1).getDay();
+                    const days=new Date(calendarMonth.year,calendarMonth.month+1,0).getDate();
+                    const cells=[];
+                    for(let i=0;i<first;i++) cells.push(<div key={`e${i}`}/>);
+                    for(let d=1;d<=days;d++){
+                      const ds=`${calendarMonth.year}-${String(calendarMonth.month+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+                      const sel=ds===selectedDate,has=!!entries[ds];
+                      const dow=new Date(calendarMonth.year,calendarMonth.month,d).getDay();
+                      cells.push(<button key={d} style={{...S.calDay,...(sel?S.calDaySel:{})}} onClick={()=>{setSelectedDate(ds);setShowCalendar(false);}}>
+                        <span style={{color:sel?"#FAF6F0":dow===0?"#C0392B":dow===6?"#7BAFD4":"#5C4A32"}}>{d}</span>
+                        {has&&<div style={{...S.calDot,background:sel?"#FAF6F0":"#C4A882"}}/>}
+                      </button>);
+                    }
+                    return cells;
+                  })()}
+                </div>
+              </div>
+            )}
+            <div style={S.section}>
+              <div style={S.label}>오늘의 기분</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                {MOODS.map(m=>(
+                  <button key={m} style={{...S.moodChip,...(draft.mood===m?{background:MOOD_COLORS[m],color:"#fff",borderColor:MOOD_COLORS[m]}:{})}}
+                    onClick={()=>setDraft(d=>({...d,mood:m}))}>{MOOD_EMOJI[m]} {m}</button>
+                ))}
+              </div>
+            </div>
+            <div style={S.section}>
+              <div style={S.label}>사진 첨부 ({draft.photos.length}/{MAX_PHOTOS})</div>
+              <input ref={fileInputRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={handlePhotos}/>
+              {draft.photos.length>0&&(
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:10}}>
+                  {draft.photos.map((p,i)=>(
+                    <div key={i} style={{position:"relative",borderRadius:10,overflow:"hidden",aspectRatio:"1"}}>
+                      <img src={p} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                      <button style={S.removePhoto} onClick={()=>removePhoto(i)}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {draft.photos.length<MAX_PHOTOS&&(
+                <button style={S.photoBtn} onClick={()=>fileInputRef.current.click()}>
+                  <span style={{fontSize:22}}>🖼️</span>
+                  <span>갤러리에서 사진 선택</span>
+                  <span style={{fontSize:11,color:"#C4A882"}}>최대 {MAX_PHOTOS}장</span>
+                </button>
+              )}
+            </div>
+            <div style={S.section}>
+              <div style={S.label}>오늘의 이야기</div>
+              <textarea style={S.textarea} placeholder=""
+                value={draft.text} onChange={e=>setDraft(d=>({...d,text:e.target.value}))}/>
+            </div>
+            <div style={S.section}>
+              <div style={S.label}>음성 녹음</div>
+              {isRecording
+                ?<div style={S.recBox}>
+                  <div style={S.recDot}/>
+                  <span style={{fontFamily:"monospace",fontSize:16,fontWeight:700,color:"#5C4A32"}}>{Math.floor(recordingTime/60).toString().padStart(2,"0")}:{(recordingTime%60).toString().padStart(2,"0")}</span>
+                  <span style={{color:"#C0654A",fontSize:13}}>녹음 중...</span>
+                  <button style={S.stopBtn} onClick={stopRecording}>⏹ 완료</button>
+                </div>
+                :<button style={S.voiceBtn} onClick={startRecording}><span style={{fontSize:22}}>🎙️</span> 음성녹음</button>
+              }
+            </div>
+            <div style={{height:24}}/>
+          </div>
+        </div>
+      )}
+
+      {view==="read"&&entries[selectedDate]&&(
+        <div style={S.scroll}>
+          <div style={{padding:"20px 18px 0"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
+              <span style={{fontFamily:"'Nanum Myeongjo',serif",fontSize:17,fontWeight:700,color:"#5C4A32"}}>{formatDate(selectedDate)}</span>
+              <span style={{...S.badge,background:(MOOD_COLORS[entries[selectedDate].mood]||"#C4A882")+"22",color:MOOD_COLORS[entries[selectedDate].mood]||"#C4A882"}}>
+                {MOOD_EMOJI[entries[selectedDate].mood]} {entries[selectedDate].mood}
+              </span>
+            </div>
+            {(entries[selectedDate].photos||[]).length>0&&(
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:18}}>
+                {(entries[selectedDate].photos||[]).map((p,i)=>(
+                  <div key={i} style={{borderRadius:10,overflow:"hidden",aspectRatio:"1"}}>
+                    <img src={p} alt="" style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{height:1,background:"#E8DDD0",marginBottom:18}}/>
+            <div style={{fontSize:17,color:"#5C4A32",lineHeight:2,fontFamily:"'Nanum Myeongjo',serif",marginBottom:28,whiteSpace:"pre-wrap"}}>{entries[selectedDate].text||"(내용 없음)"}</div>
+            <button style={{width:"100%",background:"none",border:"1px solid #E0D0C4",color:"#A89070",borderRadius:10,padding:"11px",fontSize:13,cursor:"pointer"}} onClick={()=>deleteEntry(selectedDate)}>🗑 일기 삭제</button>
+            <div style={{height:80}}/>
+          </div>
+        </div>
+      )}
+
+      <div style={S.bottomBar}>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <button style={{...S.exportBtn,flex:1}} onClick={exportAll}>
+            <div style={S.exportIcon}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path d="M17 21H7a2 2 0 01-2-2V5a2 2 0 012-2h8l4 4v12a2 2 0 01-2 2z" stroke="#8B6D4E" strokeWidth="1.8" strokeLinejoin="round"/>
+                <path d="M9 21v-6h6v6M9 3v4h6V3" stroke="#8B6D4E" strokeWidth="1.8" strokeLinejoin="round"/>
+              </svg>
+            </div>
+            <span style={{flex:1,textAlign:"left",fontSize:13,fontWeight:600,color:"#5C4A32"}}>전체 내보내기 (글+사진)</span>
+            <span style={{fontSize:12,color:"#A89070",background:"#E8DDD0",borderRadius:20,padding:"3px 10px"}}>{sortedDates.length}개</span>
+          </button>
+          <button style={{width:44,height:44,background:"#F0E8DC",border:"none",borderRadius:12,fontSize:19,cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}
+            onClick={()=>setShowGHSetup(true)} title="GitHub 설정 변경">
+            ⚙️
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const styles = {
+  root:{height:"100%",width:"100%",display:"flex",flexDirection:"column",background:"#FAF6F0",overflow:"hidden"},
+  header:{background:"#FAF6F0",borderBottom:"1px solid #E8DDD0",padding:"max(env(safe-area-inset-top),14px) 16px 12px",flexShrink:0,zIndex:10},
+  headerInner:{display:"flex",alignItems:"center",justifyContent:"space-between"},
+  headerTitle:{fontFamily:"'Nanum Myeongjo',serif",fontSize:22,fontWeight:900,color:"#5C4A32",flex:1,textAlign:"center"},
+  iconBtn:{width:36,height:36,background:"none",border:"none",fontSize:20,color:"#8B6D4E",cursor:"pointer",borderRadius:8},
+  pillBtn:{background:"#8B6D4E",color:"#FAF6F0",border:"none",borderRadius:20,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif",whiteSpace:"nowrap"},
+  scroll:{flex:1,overflowY:"auto",WebkitOverflowScrolling:"touch"},
+  hero:{background:"linear-gradient(135deg,#C8B89A,#B8A080)",margin:"14px 14px 6px",borderRadius:18,padding:"24px 20px",position:"relative",overflow:"hidden"},
+  heroDate:{fontFamily:"'Nanum Myeongjo',serif",fontSize:24,fontWeight:800,color:"#FAF6F0",marginBottom:4},
+  heroSub:{fontSize:13,color:"#EDE5DA",fontWeight:300},
+  heroEmoji:{position:"absolute",right:18,top:"50%",transform:"translateY(-50%)",fontSize:44,opacity:.6},
+  empty:{textAlign:"center",padding:"56px 24px",color:"#A89070",display:"flex",flexDirection:"column",alignItems:"center",gap:12,fontSize:14},
+  card:{margin:"0 14px 10px",borderRadius:14,background:"#FFFDF9",boxShadow:"0 2px 10px rgba(100,70,40,.07)",overflow:"hidden",display:"flex",cursor:"pointer"},
+  cardBar:{width:4,flexShrink:0},
+  cardBody:{padding:"12px 14px",flex:1,minWidth:0},
+  cardRow:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:5},
+  cardDate:{fontFamily:"'Nanum Myeongjo',serif",fontSize:14,fontWeight:700,color:"#5C4A32"},
+  badge:{borderRadius:20,padding:"2px 9px",fontSize:11,fontWeight:500},
+  cardPreview:{fontSize:13,color:"#8B7A68",lineHeight:1.55,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"},
+  datePill:{width:"100%",background:"#F0E8DC",border:"none",borderRadius:12,padding:"11px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,cursor:"pointer"},
+  datePillText:{fontFamily:"'Nanum Myeongjo',serif",fontSize:15,color:"#6B5240",fontWeight:700},
+  cal:{background:"#FFFDF9",border:"1.5px solid #E0D4C4",borderRadius:14,padding:14,marginBottom:16,boxShadow:"0 4px 18px rgba(100,70,40,.1)"},
+  calHead:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10},
+  calNav:{background:"#F0E8DC",border:"none",borderRadius:8,width:30,height:30,fontSize:18,color:"#8B6D4E",cursor:"pointer"},
+  calTitle:{fontFamily:"'Nanum Myeongjo',serif",fontSize:15,fontWeight:700,color:"#5C4A32"},
+  calGrid:{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:"3px 2px"},
+  calDayLabel:{textAlign:"center",fontSize:11,fontWeight:600,padding:"3px 0"},
+  calDay:{background:"none",border:"none",borderRadius:7,padding:"5px 2px",fontSize:13,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,minHeight:32},
+  calDaySel:{background:"#8B6D4E"},
+  calDot:{width:4,height:4,borderRadius:"50%"},
+  section:{marginBottom:20},
+  label:{fontSize:11,fontWeight:500,color:"#A89070",letterSpacing:1,textTransform:"uppercase",marginBottom:9},
+  moodChip:{border:"1.5px solid #D4C4B0",background:"#FFFDF9",borderRadius:20,padding:"6px 11px",fontSize:12,color:"#8B7A68",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif"},
+  photoBtn:{width:"100%",border:"2px dashed #D4C4B0",background:"#FAF6F0",borderRadius:13,padding:16,display:"flex",flexDirection:"column",alignItems:"center",gap:6,cursor:"pointer",fontSize:13,color:"#A89070"},
+  removePhoto:{position:"absolute",top:5,right:5,background:"rgba(0,0,0,.55)",color:"#fff",border:"none",borderRadius:"50%",width:26,height:26,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"},
+  textarea:{width:"100%",minHeight:160,border:"1.5px solid #E0D4C4",borderRadius:13,padding:13,fontSize:16,color:"#5C4A32",background:"#FFFDF9",resize:"none",fontFamily:"'Noto Sans KR',sans-serif",lineHeight:1.8,outline:"none"},
+  voiceBtn:{width:"100%",background:"linear-gradient(135deg,#8B6D4E,#C4A882)",border:"none",borderRadius:13,padding:15,display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontSize:15,color:"#FAF6F0",cursor:"pointer",fontFamily:"'Noto Sans KR',sans-serif",fontWeight:600},
+  recBox:{background:"#FFF0EE",border:"1.5px solid #E87D7D",borderRadius:13,padding:15,display:"flex",alignItems:"center",gap:11},
+  recDot:{width:10,height:10,borderRadius:"50%",background:"#C0654A",animation:"pulse 1s infinite",flexShrink:0},
+  stopBtn:{marginLeft:"auto",background:"#C0654A",color:"#fff",border:"none",borderRadius:9,padding:"6px 13px",fontSize:12,cursor:"pointer"},
+  bottomBar:{borderTop:"1px solid #E8DDD0",background:"#FAF6F0",padding:"10px 16px",paddingBottom:"max(env(safe-area-inset-bottom),12px)",flexShrink:0},
+  exportBtn:{background:"linear-gradient(135deg,#F0E8DC,#E8DDD0)",border:"1.5px solid #D4C4B0",borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:11,cursor:"pointer"},
+  exportIcon:{width:38,height:38,background:"#FFFDF9",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 2px 8px rgba(100,70,40,.1)",flexShrink:0},
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<DiaryApp />);
+</script>
+<script>
+if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js').catch(()=>{}); }
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); deferredPrompt = e;
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;bottom:72px;left:12px;right:12px;background:#5C4A32;color:#FAF6F0;border-radius:16px;padding:13px 16px;display:flex;align-items:center;gap:11px;box-shadow:0 8px 28px rgba(100,70,40,.35);z-index:9999;font-family:sans-serif;font-size:14px;';
+  banner.innerHTML = '<span style="font-size:22px">📲</span><span style="flex:1">홈 화면에 앱으로 설치하기</span><button id="ib" style="background:#FAF6F0;color:#5C4A32;border:none;border-radius:10px;padding:6px 13px;font-weight:700;cursor:pointer;">설치</button><button id="db" style="background:none;border:none;color:#C4A882;font-size:20px;cursor:pointer;">×</button>';
+  document.body.appendChild(banner);
+  document.getElementById('ib').onclick = async()=>{ deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; banner.remove(); };
+  document.getElementById('db').onclick = ()=>banner.remove();
+});
+</script>
+</body>
+</html>
